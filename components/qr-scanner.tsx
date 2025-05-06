@@ -119,6 +119,8 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
       const isFrontCamera = activeDevice?.isFrontCamera || false
       setIsFlipped(isFrontCamera)
 
+      let hasScanned = false
+
       await html5QrCode.start(
         cameraId,
         {
@@ -127,6 +129,9 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
           aspectRatio: 1,
         },
         (decodedText) => {
+          if (hasScanned) return
+          hasScanned = true
+
           onScan(decodedText)
           toast.success("QR code scanned successfully!")
           stopScanner()

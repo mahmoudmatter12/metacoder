@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ArrowLeft, Download, Search, Filter } from "lucide-react"
+import { ArrowLeft, Download, Search, Filter, Trash } from "lucide-react"
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
 
 interface AttendanceRecord {
@@ -88,6 +88,17 @@ export default function AttendancePage() {
     }
 
     setFilteredData(filtered)
+  }
+
+  const clearAttendance = async () => {
+    const { error } = await supabase.from("attendance").delete().neq("id", 0) // Delete all records
+    if (error) {
+      console.error("Error clearing attendance data:", error)
+    } else {
+      setAttendanceData([])
+      setFilteredData([])
+      alert("All attendance records have been cleared.")
+    }
   }
 
   const exportToExcel = () => {
@@ -171,6 +182,10 @@ export default function AttendancePage() {
             <Button onClick={exportToExcel} className="md:w-auto">
               <Download className="mr-2 h-4 w-4" />
               Export to Excel
+            </Button>
+            <Button onClick={clearAttendance} className="md:w-auto" variant="destructive">
+              <Trash className="mr-2 h-4 w-4" />
+              Clear Attendance
             </Button>
           </div>
 
