@@ -9,20 +9,21 @@ import { toast } from "sonner"
 interface QrScannerProps {
   onScan: (data: string) => void
   onError?: (error: Error) => void
+  preferredCamera?: 'back' | 'front' | 'environment' | 'user'
 }
 
-export function QrScanner({ onScan, onError }: QrScannerProps) {
+export function QrScanner({ onScan, onError, preferredCamera = 'environment' }: QrScannerProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [hasPermission, setHasPermission] = useState<boolean | null>(null)
   const [isScanning, setIsScanning] = useState(false)
-  const [cameraDevices, setCameraDevices] = useState<{ id: string, label: string, isFrontCamera?: boolean }[]>([])
+  const [cameraDevices, setCameraDevices] = useState<{ id: string, label: string, facingMode: 'environment' | 'user' | 'unknown' }[]>([])
   const [activeCamera, setActiveCamera] = useState<string | null>(null)
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const [isFlipped, setIsFlipped] = useState(false)
   const qrScannerId = "qr-scanner"
 
-  // Detect if camera is front-facing
-  const detectFrontCamera = async (deviceId: string): Promise<boolean> => {
+  // Get camera facing mode with better detection
+  const getCameraFacingMode = async (deviceId: string): Promise<'environment' | 'user' | 'unknown'> => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { deviceId: { exact: deviceId } }
@@ -31,22 +32,31 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
       const settings = track.getSettings()
       stream.getTracks().forEach(track => track.stop())
 
-      // Standard way to detect front camera
-      if (settings.facingMode === 'user') return true
-
-      // Fallback for browsers that don't support facingMode
-      if (settings.width && settings.height) {
-        return settings.width < settings.height // Front cameras often have portrait orientation
+      // Standard way to detect facing mode
+      if (settings.facingMode) {
+        return settings.facingMode === 'user' ? 'user' : 'environment'
       }
 
       // Fallback: check device label
       const device = cameraDevices.find(d => d.id === deviceId)
-      return device?.label?.toLowerCase().includes('front') ||
-        device?.label?.toLowerCase().includes('face') ||
-        device?.label?.toLowerCase().includes('user') ||
-        false
+      if (device) {
+        const label = device.label.toLowerCase()
+        if (label.includes('front') || label.includes('face') || label.includes('user')) {
+          return 'user'
+        }
+        if (label.includes('back') || label.includes('environment') || label.includes('rear')) {
+          return 'environment'
+        }
+      }
+
+      // Fallback for browsers that don't support facingMode
+      if (settings.width && settings.height) {
+        return settings.width < settings.height ? 'user' : 'environment'
+      }
+
+      return 'unknown'
     } catch {
-      return false
+      return 'unknown'
     }
   }
 
@@ -57,16 +67,25 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
       try {
         const devices = await Html5Qrcode.getCameras()
         if (devices && devices.length > 0) {
-          // Detect which cameras are front-facing
+          // Detect which cameras are front/back facing
           const devicesWithInfo = await Promise.all(
             devices.map(async device => ({
               ...device,
-              isFrontCamera: await detectFrontCamera(device.id)
+              facingMode: await getCameraFacingMode(device.id)
             }))
           )
 
           setCameraDevices(devicesWithInfo)
-          setActiveCamera(devicesWithInfo[0].id)
+          
+          // Try to find the preferred camera
+          const preferredCam = devicesWithInfo.find(device => 
+            preferredCamera === 'environment' 
+              ? device.facingMode === 'environment' 
+              : device.facingMode === 'user'
+          )
+          
+          // Fallback to first available camera if preferred not found
+          setActiveCamera(preferredCam?.id || devicesWithInfo[0].id)
           setHasPermission(true)
         } else {
           setHasPermission(false)
@@ -88,7 +107,7 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
     return () => {
       stopScanner()
     }
-  }, [onError])
+  }, [onError, preferredCamera])
 
   // Start/stop scanner when active camera changes
   useEffect(() => {
@@ -109,14 +128,13 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
         await stopScanner()
       }
 
-
       const html5QrCode = new Html5Qrcode(qrScannerId)
       scannerRef.current = html5QrCode
 
       setIsScanning(true)
 
       const activeDevice = cameraDevices.find(d => d.id === cameraId)
-      const isFrontCamera = activeDevice?.isFrontCamera || false
+      const isFrontCamera = activeDevice?.facingMode === 'user'
       setIsFlipped(isFrontCamera)
 
       let hasScanned = false
@@ -126,7 +144,7 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
         {
           fps: 10,
           qrbox: { width: 250, height: 250 },
-          aspectRatio: 1,
+          aspectRatio: 1.333, // Standard camera aspect ratio (4:3)
         },
         (decodedText) => {
           if (hasScanned) return
@@ -154,20 +172,21 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
     }
   }
 
-
   const handleRequestCameraAccess = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      stream.getTracks().forEach((track) => track.stop());
-      toast.success("Camera access granted!");
-      setHasPermission(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      stream.getTracks().forEach((track) => track.stop())
+      toast.success("Camera access granted!")
+      setHasPermission(true)
+      // Reload cameras after permission granted
+      window.location.reload()
     } catch (err) {
-      console.error("Error requesting camera access:", err);
-      toast.error("Failed to access the camera");
-      setHasPermission(false);
-      if (onError) onError(err as Error);
+      console.error("Error requesting camera access:", err)
+      toast.error("Failed to access the camera")
+      setHasPermission(false)
+      if (onError) onError(err as Error)
     }
-  };
+  }
 
   const stopScanner = async () => {
     try {
@@ -311,7 +330,9 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
           >
             {cameraDevices.map((device) => (
               <option key={device.id} value={device.id}>
-                {device.label || `Camera ${cameraDevices.indexOf(device) + 1}`}
+                {device.facingMode === 'user' ? 'Front Camera' : 
+                 device.facingMode === 'environment' ? 'Back Camera' : 
+                 device.label || `Camera ${cameraDevices.indexOf(device) + 1}`}
               </option>
             ))}
           </select>
