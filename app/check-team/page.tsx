@@ -7,9 +7,11 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { QrScanner } from "@/components/qr-scanner"
 import { TeamCard } from "@/components/team-card"
 import { ManualCodeEntry } from "@/components/manual-code-entry"
-import { ArrowLeft, QrCode, Keyboard } from "lucide-react"
+import { ArrowLeft, QrCode, Keyboard, AlertCircle } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
+import { toast } from "sonner"
 interface Team {
   id: number
   team_name: string
@@ -27,9 +29,10 @@ interface Team {
 export default function CheckTeamPage() {
   const [scannedCode, setScannedCode] = useState<string | null>(null)
   const [teamData, setTeamData] = useState<Team | null>(null)
-  const [isScanning, setIsScanning] = useState(true)
+  const [, setIsScanning] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<string>("scan")
 
   const supabase = createClientComponentClient()
 
@@ -50,6 +53,7 @@ export default function CheckTeamPage() {
   const fetchTeamData = async (code: string) => {
     setIsLoading(true)
     setError(null)
+    setTeamData(null) // Clear previous team data
 
     try {
       // Try to parse the code as a number
@@ -67,7 +71,14 @@ export default function CheckTeamPage() {
 
       if (teamError) {
         console.error("Error fetching team:", teamError)
-        setError("Error fetching team data. Please try again.")
+
+        if (teamError.code === "PGRST116") {
+          // This is the "not found" error from Supabase
+          setError("No team found with this code")
+        } else {
+          setError("Error fetching team data. Please try again.")
+        }
+
         setTeamData(null)
       } else if (!team) {
         setError("No team found with this code")
@@ -80,16 +91,15 @@ export default function CheckTeamPage() {
           {
             team_code: teamCode,
             location: "Check-in Station",
-            notes: `Checked in via ${isScanning ? "QR scan" : "manual entry"}`,
+            notes: `Checked in via ${activeTab === "scan" ? "QR scan" : "manual entry"}`,
           },
         ])
 
         if (attendanceError) {
           console.error("Error recording attendance:", attendanceError)
-          // 
+          toast("Error recording attendance. Please try again.")
         } else {
-          console.log("Attendance recorded successfully")
-          setError(null)
+          toast("Attendance recorded successfully!")
         }
       }
     } catch (err) {
@@ -106,6 +116,12 @@ export default function CheckTeamPage() {
     setTeamData(null)
     setError(null)
     setIsScanning(true)
+  }
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value)
+    // Reset error state when switching tabs
+    setError(null)
   }
 
   return (
@@ -132,7 +148,7 @@ export default function CheckTeamPage() {
           </CardHeader>
           <CardContent>
             {!scannedCode ? (
-              <Tabs defaultValue="scan" className="w-full">
+              <Tabs defaultValue="scan" value={activeTab} onValueChange={handleTabChange} className="w-full">
                 <TabsList className="grid w-full grid-cols-2 mb-4">
                   <TabsTrigger value="scan" className="flex items-center">
                     <QrCode className="mr-2 h-4 w-4" />
@@ -145,7 +161,16 @@ export default function CheckTeamPage() {
                 </TabsList>
                 <TabsContent value="scan">
                   <div className="w-full max-w-md mx-auto">
-                    <QrScanner onScan={handleScan} />
+                    <QrScanner
+                      onScan={handleScan}
+                      onError={(err) => {
+                        console.error("Scanner error:", err)
+                        // Don't set error state for camera permission issues
+                        if (!err.message.includes("Permission") && !err.message.includes("camera")) {
+                          setError("Scanner error: " + err.message)
+                        }
+                      }}
+                    />
                   </div>
                 </TabsContent>
                 <TabsContent value="manual">
@@ -180,9 +205,11 @@ export default function CheckTeamPage() {
             ) : teamData ? (
               <TeamCard team={teamData} />
             ) : error ? (
-              <div className="text-center p-8">
-                <p className="text-red-500">{error}</p>
-              </div>
+              <Alert variant="destructive" className="my-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Error</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
             ) : (
               <div className="text-center p-8 text-muted-foreground">
                 <p>No team data to display yet</p>
