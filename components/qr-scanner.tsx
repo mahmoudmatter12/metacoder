@@ -15,11 +15,40 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [hasPermission, setHasPermission] = useState<boolean | null>(null)
   const [isScanning, setIsScanning] = useState(false)
-  const [cameraDevices, setCameraDevices] = useState<{id: string, label: string}[]>([])
+  const [cameraDevices, setCameraDevices] = useState<{ id: string, label: string, isFrontCamera?: boolean }[]>([])
   const [activeCamera, setActiveCamera] = useState<string | null>(null)
-  const [isFlipped, setIsFlipped] = useState(false)
   const scannerRef = useRef<Html5Qrcode | null>(null)
+  const [isFlipped, setIsFlipped] = useState(false)
   const qrScannerId = "qr-scanner"
+
+  // Detect if camera is front-facing
+  const detectFrontCamera = async (deviceId: string): Promise<boolean> => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } }
+      })
+      const track = stream.getVideoTracks()[0]
+      const settings = track.getSettings()
+      stream.getTracks().forEach(track => track.stop())
+
+      // Standard way to detect front camera
+      if (settings.facingMode === 'user') return true
+
+      // Fallback for browsers that don't support facingMode
+      if (settings.width && settings.height) {
+        return settings.width < settings.height // Front cameras often have portrait orientation
+      }
+
+      // Fallback: check device label
+      const device = cameraDevices.find(d => d.id === deviceId)
+      return device?.label?.toLowerCase().includes('front') ||
+        device?.label?.toLowerCase().includes('face') ||
+        device?.label?.toLowerCase().includes('user') ||
+        false
+    } catch {
+      return false
+    }
+  }
 
   // Initialize scanner and get camera devices
   useEffect(() => {
@@ -28,8 +57,16 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
       try {
         const devices = await Html5Qrcode.getCameras()
         if (devices && devices.length > 0) {
-          setCameraDevices(devices)
-          setActiveCamera(devices[0].id)
+          // Detect which cameras are front-facing
+          const devicesWithInfo = await Promise.all(
+            devices.map(async device => ({
+              ...device,
+              isFrontCamera: await detectFrontCamera(device.id)
+            }))
+          )
+
+          setCameraDevices(devicesWithInfo)
+          setActiveCamera(devicesWithInfo[0].id)
           setHasPermission(true)
         } else {
           setHasPermission(false)
@@ -72,11 +109,16 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
         await stopScanner()
       }
 
+
       const html5QrCode = new Html5Qrcode(qrScannerId)
       scannerRef.current = html5QrCode
-      
+
       setIsScanning(true)
-      
+
+      const activeDevice = cameraDevices.find(d => d.id === cameraId)
+      const isFrontCamera = activeDevice?.isFrontCamera || false
+      setIsFlipped(isFrontCamera)
+
       await html5QrCode.start(
         cameraId,
         {
@@ -91,9 +133,14 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
         },
         (errorMessage) => {
           console.log("QR Code scan error:", errorMessage)
-          // Don't show every error to user - many are just "no QR found" during normal operation
         }
       )
+
+      // Apply mirror effect for front camera
+      const scannerElement = document.getElementById(qrScannerId)
+      if (scannerElement) {
+        scannerElement.style.transform = isFrontCamera ? 'scaleX(-1)' : 'none'
+      }
     } catch (err) {
       console.error("Error starting scanner:", err)
       toast.error("Failed to start camera")
@@ -102,6 +149,21 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
     }
   }
 
+
+  const handleRequestCameraAccess = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      stream.getTracks().forEach((track) => track.stop());
+      toast.success("Camera access granted!");
+      setHasPermission(true);
+    } catch (err) {
+      console.error("Error requesting camera access:", err);
+      toast.error("Failed to access the camera");
+      setHasPermission(false);
+      if (onError) onError(err as Error);
+    }
+  };
+
   const stopScanner = async () => {
     try {
       if (scannerRef.current?.isScanning) {
@@ -109,6 +171,12 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
       }
       scannerRef.current = null
       setIsScanning(false)
+
+      // Reset any transforms
+      const scannerElement = document.getElementById(qrScannerId)
+      if (scannerElement) {
+        scannerElement.style.transform = 'none'
+      }
     } catch (err) {
       console.error("Error stopping scanner:", err)
       if (onError) onError(err as Error)
@@ -117,34 +185,10 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
 
   const switchCamera = () => {
     if (cameraDevices.length < 2) return
-    
+
     const currentIndex = cameraDevices.findIndex(device => device.id === activeCamera)
     const nextIndex = (currentIndex + 1) % cameraDevices.length
     setActiveCamera(cameraDevices[nextIndex].id)
-    setIsFlipped(!isFlipped)
-  }
-
-  const requestCameraAccess = async () => {
-    try {
-      setIsLoading(true)
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-      stream.getTracks().forEach(track => track.stop())
-      setHasPermission(true)
-      
-      // Re-initialize cameras
-      const devices = await Html5Qrcode.getCameras()
-      if (devices && devices.length > 0) {
-        setCameraDevices(devices)
-        setActiveCamera(devices[0].id)
-      }
-    } catch (err) {
-      console.error("Camera access denied:", err)
-      setHasPermission(false)
-      toast.error("Camera access denied")
-      if (onError) onError(err as Error)
-    } finally {
-      setIsLoading(false)
-    }
   }
 
   return (
@@ -161,7 +205,7 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
           <p className="text-muted-foreground mb-6">
             Please enable camera permissions to scan QR codes
           </p>
-          <Button onClick={requestCameraAccess}>
+          <Button onClick={handleRequestCameraAccess}>
             <Camera className="mr-2 h-4 w-4" />
             Allow Camera Access
           </Button>
@@ -181,11 +225,11 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
       ) : (
         <div className="relative group">
           {/* Scanner View */}
-          <div 
-            id={qrScannerId} 
+          <div
+            id={qrScannerId}
             className={`w-full aspect-square bg-black rounded-lg overflow-hidden ${isFlipped ? 'scale-x-[-1]' : ''}`}
           />
-          
+
           {/* Scanner UI Overlay */}
           <div className="absolute inset-0 pointer-events-none flex flex-col">
             {/* Top bar */}
@@ -197,9 +241,9 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
                     <span className="text-xs">Scanning</span>
                   </div>
                 ) : (
-                  <Button 
-                    variant="secondary" 
-                    size="sm" 
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     className="pointer-events-auto"
                     onClick={() => activeCamera && startScanner(activeCamera)}
                   >
@@ -209,7 +253,7 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
                 )}
               </div>
             </div>
-            
+
             {/* Center frame */}
             <div className="flex-1 flex items-center justify-center">
               <div className="border-2 border-dashed border-primary/50 rounded-lg w-64 h-64 relative">
@@ -219,24 +263,24 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
                 <div className="absolute -bottom-1 -right-1 w-3 h-3 border-b-2 border-r-2 border-primary" />
               </div>
             </div>
-            
+
             {/* Bottom bar */}
             <div className="bg-gradient-to-t from-black/60 to-transparent p-4 flex justify-center">
               <div className="pointer-events-auto flex gap-2">
                 {cameraDevices.length > 1 && (
-                  <Button 
-                    variant="secondary" 
-                    size="icon" 
+                  <Button
+                    variant="secondary"
+                    size="icon"
                     onClick={switchCamera}
                     title="Switch Camera"
                   >
                     <RotateCw className="h-4 w-4" />
                   </Button>
                 )}
-                
+
                 {isScanning && (
-                  <Button 
-                    variant="secondary" 
+                  <Button
+                    variant="secondary"
                     onClick={stopScanner}
                   >
                     Stop Scanner
@@ -247,7 +291,7 @@ export function QrScanner({ onScan, onError }: QrScannerProps) {
           </div>
         </div>
       )}
-      
+
       {/* Camera selection dropdown (when not scanning) */}
       {!isScanning && cameraDevices.length > 1 && (
         <div className="mt-4">
